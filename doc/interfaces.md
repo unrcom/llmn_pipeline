@@ -497,3 +497,158 @@ Response 200: `{ "orphans": [ { orphan_id, old_seq, old_text, old_metadata, reso
 
 ---
 
+## 7.11 Query 系 API 詳細(確定)
+
+### レスポンス方式(確定)
+
+- **一括レスポンス**。ストリーミング(SSE)は採用しない
+- **ハイブリッド同期/非同期契約(§7.7)は /query にも適用する**。生成が 10 秒を超えたら
+  202 + job_id を返し、`GET /jobs/{job_id}` の result に下記の一括レスポンスがそのまま入る
+- 将来チャット UI を作る際に SSE が必要になれば、既存契約と並存させる(Accept ヘッダでの切り替え等)
+
+### POST /projects/{project_id}/query — フルパイプライン実行(Q1〜Q5)
+
+```jsonc
+// Request
+{
+  "user_input": "頭痛に効く薬は?",           // 必須
+  "session_id": "uuid",                      // 任意(継続会話。なければ新規セッション扱い)
+  "model_key": "bge_m3",                     // 任意(既定: is_default)
+  "transform_mode": "llm_rewrite",           // 任意(既定: プロジェクト設定)
+  "retrieval_plan": { "passes": [...] },     // 任意(既定: プロジェクト設定)
+  "metadata_filter": { "category": "薬効" }, // 任意
+  "include_trace": false                     // 任意(既定: false)
+}
+
+// Response 200(10秒以内。超過時は §7.7 の契約で 202)
+{
+  "trace_id": "uuid",
+  "session_id": "uuid",
+  "response": "頭痛には、次の薬が...",
+  "is_empty": false,          // true なら「データなし」応答だったことを示す
+  "context_chunks": [         // 生成に使ったチャンク(出典表示用の最小情報)
+    { "chunk_id": "uuid", "source_id": "uuid", "section_title": "効能・効果", "found_in": ["meta+vec"] }
+  ],
+  "response_time_ms": 4321,
+  "trace": { ... }            // include_trace: true のとき QueryTrace 全体
+}
+```
+
+### POST /projects/{project_id}/search — 検索のみ(Q1〜Q3)
+
+Request は /query と同形式(session_id は不要)。
+
+```jsonc
+// Response 200
+{
+  "trace_id": "uuid",
+  "transformed_query": { "original": "...", "query": "...", "mode": "llm_rewrite" },
+  "context": {
+    "chunks": [
+      { "chunk_id": "...", "text": "...", "section_title": "...", "seq": 0,
+        "metadata": { ... }, "score": 0.32, "score_type": "cosine_distance",
+        "found_in": ["meta+vec", "fulltext"] }
+    ],
+    "is_empty": false,
+    "dropped": [ ... ]        // 落としたものも返す(調整作業の主役)
+  },
+  "passes": [                 // パス別の生結果(search loosely の観察用)
+    { "name": "meta+vec", "hit_count": 10, "elapsed_ms": 45 }
+  ]
+}
+```
+
+### POST /projects/{project_id}/compare — 比較モード
+
+```jsonc
+// Request
+{
+  "user_input": "頭痛に効く薬は?",
+  "model_keys": ["bge_m3", "plamo_emb_1b"],  // 任意(既定: プロジェクトに登録済みの全モデル)
+  "transform_mode": "passthrough",            // 任意。比較の公平性のため全モデル共通
+  "retrieval_plan": { ... },                  // 任意。同上
+  "metadata_filter": { ... }                  // 任意
+}
+
+// Response 200
+{
+  "comparisons": [
+    { "model_key": "bge_m3",       "trace_id": "uuid", "result": { search と同形式 } },
+    { "model_key": "plamo_emb_1b", "trace_id": "uuid", "result": { search と同形式 } }
+  ]
+}
+```
+
+### 設計判断
+
+1. **/query の応答は「会話に必要な最小限」**。詳細は trace_id 経由(include_trace: true か
+   GET /traces/{trace_id})の 2 段構え
+2. **/search は dropped まで返す**。評価・調整用エンドポイントであり「何を落としたか」が主役級の情報
+3. **/compare は 1 モデル = 1 トレース**(generation: null)。比較専用の記録形式は作らず、
+   トレースの世界を一元化する
+
+---
+
+## 7.12 エンベディング / ジョブ / トレース系 API 詳細(確定)
+
+### GET /embedding-models — 台帳一覧
+
+```jsonc
+// Response 200
+{
+  "models": [
+    { "model_key": "bge_m3", "model_name": "BAAI/bge-m3",
+      "dimensions": 1024, "vector_type": "vector", "is_active": true }
+  ]
+}
+```
+
+### POST /projects/{project_id}/embed — 一括エンベディング
+
+```jsonc
+// Request
+{
+  "model_key": "plamo_emb_1b",   // 必須
+  "source_ids": ["uuid"]         // 任意(省略時: プロジェクト内の全ソース)
+}
+// Response: §7.7 ハイブリッド契約
+// result: { "model_key": "plamo_emb_1b", "embedded": 322, "skipped": 0 }
+```
+
+**冪等**: 既にベクトルがあるチャンクはスキップする。何度呼んでも安全であり、
+モデル追加後の「追いつき処理」がこの API 1 本で済む。
+
+### GET /jobs/{job_id} — ジョブ照会
+
+§7.7 で定義済みの形式(status: processing/completed/failed + progress / result / error)。
+
+### GET /projects/{project_id}/traces — トレース一覧
+
+```jsonc
+// Query パラメータ:
+//   ?session_id=uuid&from=2026-07-01T00:00:00Z&to=...&kind=query|search|compare&limit=50&offset=0
+// Response 200
+{
+  "traces": [
+    { "trace_id": "uuid", "kind": "query", "session_id": "uuid",
+      "user_input": "頭痛に効く薬は?", "model_key": "bge_m3",
+      "is_empty": false, "has_generation": true,
+      "response_time_ms": 4321, "created_at": "..." }
+  ],
+  "total": 123
+}
+```
+
+一覧は軽量サマリのみ。`kind` は /query・/search・/compare のどれ由来かを示す(評価時のフィルタ用)。
+
+### GET /traces/{trace_id} — トレース詳細
+
+Response 200: **QueryTrace 全体**(§7.5.2 の構造そのまま。
+request / transformed / retrieval(パス別生結果)/ context(dropped 込み)/ generation(prompt 全文込み))
+
+---
+
+以上で全エンドポイントの詳細定義は完了。実装順序は [implementation_plan.md](./implementation_plan.md) を参照。
+
+---
+
