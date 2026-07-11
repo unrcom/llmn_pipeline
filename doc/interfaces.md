@@ -389,3 +389,111 @@ Response 200: `{ "settings": [ ... ] }`
 
 ---
 
+## 7.10 Ingestion 系 API 詳細(確定)
+
+### front matter の意味論(確定)
+
+**文書レベルのみ**を解釈する。ソーステキスト先頭の front matter が、そのソースから生成される
+**全チャンクの ingest_metadata に同じ内容**として入る。セクション単位の付与は独自記法の発明を
+伴うため採用しない(チャンク単位の差は user_metadata で付ける。ingest_metadata のカラム設計は
+将来のセクションレベル解釈にも対応できる形なので、必要が実証されたら拡張する)。
+
+### POST /projects/{project_id}/sources — ソース登録+取り込み(I1〜I5)
+
+```jsonc
+// Request
+{
+  "source_data": "薬効データベース 2026年版",   // 必須(ソースの説明)
+  "raw_text": "---\ncategory: 薬効\n---\n# ロキソプロフェン\n...",  // 必須
+  "metadata": { "department": "内科" },        // 任意(ソース由来メタデータ)
+  "embed_models": ["bge_m3"]                   // 任意(既定: is_default のモデルのみ)
+}
+
+// Response 200(10秒以内に完了)
+{
+  "status": "completed",
+  "job_id": "uuid",
+  "result": {
+    "source_id": "uuid",
+    "run_id": "uuid",
+    "chunks_total": 12, "chunks_carried": 0, "chunks_new": 12, "chunks_dropped": 0,
+    "embedded": { "bge_m3": 12 }
+  }
+}
+// Response 202(10秒超過)→ §7.7 の契約通り
+```
+
+### PUT /sources/{source_id} — ソース更新+再取り込み(引き継ぎルール発動)
+
+Request は POST と同形式(source_data / raw_text / metadata / embed_models のうち渡されたものだけ更新)。
+Response も同じハイブリッド契約。result の carried / dropped に引き継ぎ結果が出る。
+dropped > 0 の場合は孤児 API(下記)で詳細を確認する。
+
+### GET /projects/{project_id}/sources — 一覧
+
+Response 200: `{ "sources": [ { source_id, source_data, metadata, created_at, updated_at, chunk_count } ] }`
+
+### GET /sources/{source_id} — 詳細
+
+Response 200: 上記 + raw_text
+
+### DELETE /sources/{source_id} — 削除
+
+Response 204。CASCADE で chunks / embeddings も削除(復旧は audit_log)。
+
+### GET /sources/{source_id}/chunks — チャンク一覧
+
+```jsonc
+// Response 200
+{
+  "chunks": [
+    {
+      "chunk_id": "uuid", "seq": 0,
+      "section_title": "効能・効果",
+      "text": "...",
+      "content_hash": "sha256...",
+      "ingest_metadata": { "category": "薬効" },
+      "user_metadata": { "重要度": "高" },
+      "embedded_in": ["bge_m3", "plamo_emb_1b"]   // どのモデルでベクトル化済みか
+    }
+  ]
+}
+```
+
+### PATCH /chunks/{chunk_id}/metadata — user_metadata の編集
+
+```jsonc
+// Request(user_metadata 全体を置換。部分マージではない)
+{ "user_metadata": { "重要度": "高", "確認済み": true } }
+// Response 200: 更新後のチャンク(上記 chunks 要素と同形式)
+```
+
+### GET /sources/{source_id}/export — front matter 形式エクスポート
+
+Response 200: `{ "content": "---\n...\n---\n# ...", "format": "frontmatter_markdown" }`
+
+user_metadata を front matter に織り込んだ、再取り込み可能な形式を返す。
+「API で試行錯誤 → 良かった設定をソースに反映 → 再取り込みしても残る」の運用ループ用。
+
+### GET /sources/{source_id}/ingest-runs — 取り込み履歴
+
+Response 200: `{ "runs": [ { run_id, executed_at, chunks_total, chunks_carried, chunks_new, chunks_dropped } ] }`
+
+### GET /ingest-runs/{run_id}/orphans — 孤児メタデータ一覧
+
+Query パラメータ: `?resolved=false`(未解決のみ)
+Response 200: `{ "orphans": [ { orphan_id, old_seq, old_text, old_metadata, resolved } ] }`
+
+### POST /orphans/{orphan_id}/apply — 孤児の再適用
+
+```jsonc
+// Request
+{ "chunk_id": "uuid", "mode": "replace" }   // mode: "replace" | "merge"
+// Response 200: 適用後のチャンク。orphan は resolved=true になる
+```
+
+- `replace`: 対象チャンクの user_metadata を old_metadata で置き換える
+- `merge`: 対象チャンクの user_metadata に old_metadata をマージする(キー衝突は old_metadata が勝つ)
+
+---
+
