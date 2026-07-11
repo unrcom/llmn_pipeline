@@ -245,7 +245,104 @@ Embedder(抽象)
 
 実装: BgeM3Embedder / MultilingualE5Embedder / PlamoEmbedder。プレフィックス付与や encode_query/encode_document の呼び分けは各実装の内部に閉じる。
 
-※ Query 側(Q1〜Q5)のインターフェース定義は次ステップで行う。
+---
+
+## 7.5 Query 側インターフェース定義(確定)
+
+### 7.5.1 パラメータ解決の統一パターン
+
+Query 側の可変パラメータ(model_key / transform_mode / retrieval_plan / threshold)はすべて
+**「プロジェクト設定に既定値を持ち、リクエストで都度上書き可能」** とする。
+
+### 7.5.2 データ構造
+
+```
+QueryRequest       … パイプライン全体への入力(API リクエストの中身)
+  - project_id: UUID
+  - user_input: str                # ユーザーの生入力
+  - model_key: str | None          # None なら is_default のモデル
+  - transform_mode: str | None     # None なら projects.query_transform_mode
+  - retrieval_plan: RetrievalPlan | None  # None ならプロジェクト既定プラン
+  - metadata_filter: dict | None   # JSONB に対するフィルタ条件
+
+TransformedQuery   … Q1 の出力
+  - original: str                  # user_input そのまま(トレース用)
+  - query: str                     # 実際に検索に使うクエリ
+  - mode: str                      # 'passthrough' | 'llm_rewrite'(実際に適用されたもの)
+
+RetrievalPlan      … 検索の実行計画(多段検索)
+  - passes: list[PassSpec]
+      PassSpec:
+        - name: str                 # 例 'meta+vec', 'vec_only', 'fulltext'
+        - strategy: str             # 'vector' | 'fulltext'(将来追加可)
+        - top_k: int                # パスごとに定義
+        - use_metadata_filter: bool # QueryRequest.metadata_filter を適用するか
+        - enabled: bool
+
+  既定プランの例:
+    1. vector + metadata_filter 適用, top_k=10
+    2. vector のみ(フィルタなし),   top_k=3
+    3. fulltext,                     top_k=5
+
+RetrievalResult    … Q2 の出力
+  - model_key: str
+  - passes: list[PassResult]
+      PassResult:
+        - spec: PassSpec            # 何をやったか(トレース用)
+        - hits: list[Hit]
+        - elapsed_ms: int
+  - threshold: float                # 適用予定の閾値(トレース用。足切りは Q3)
+
+Hit
+  - chunk_id: UUID
+  - text: str
+  - section_title: str | None
+  - seq: int
+  - metadata: dict                  # マージ済み実効メタデータ
+  - score: float                    # 生の値(閾値適用前)
+  - score_type: str                 # 'cosine_distance' | 'ts_rank' 等
+
+BuiltContext       … Q3 の出力
+  - chunks: list[ContextChunk]      # リランク・重複排除・件数制御後(最終順)
+      ContextChunk:
+        - hit: Hit
+        - found_in: list[str]       # ヒットしたパス名(複数パスは信頼度高)
+  - is_empty: bool                  # ゼロ件判定(「データなし」応答のトリガ)
+  - dropped: list[Hit]              # 閾値・件数制御で落としたもの(トレース用)
+
+GenerationResult   … Q4 の出力
+  - response: str
+  - llm_model: str                  # 生成に使った LLM
+  - prompt: str                     # 実際に投げたプロンプト全文(トレース用)
+  - response_time_ms: int
+
+QueryTrace         … Q5 が永続化する単位(上記すべての合成)
+  - trace_id: UUID
+  - project_id, session_id, turn_cnt
+  - request: QueryRequest
+  - transformed: TransformedQuery
+  - retrieval: RetrievalResult
+  - context: BuiltContext
+  - generation: GenerationResult | None  # 比較モード等、検索のみの場合は None
+  - created_at: datetime (UTC)
+```
+
+### 7.5.3 設計ポイント
+
+1. **多段検索(マルチパス retrieval)**: Q2 は「検索プラン(性質の違う検索パスの列)の実行」。
+   メタデータフィルタ付きベクトル検索、フィルタなしベクトル検索、全文検索などを
+   パスごとの top_k で実行し、結果をパス別に返す。「search loosely」の実体
+2. **スコアの異種混在を明示**: コサイン距離と全文検索ランクは比較不能なため score_type を持つ。
+   Q3 のリランクは異種スコアの統合(RRF: Reciprocal Rank Fusion が有力候補)
+3. **重複排除は Q3**: 同一チャンクが複数パスでヒットした場合、Q2 はそのまま返し、
+   Q3 が chunk_id で統合。found_in にパス名を残す(複数パスヒット = 信頼度の指標)
+4. **Q2 は閾値適用「前」を返す**: 足切り・リランク・件数制御・ゼロ件判定はすべて Q3 の責務。
+   「search loosely(Q2), control(Q3)」がインターフェースに現れる
+5. **各ステージの出力にトレース材料を含める**: original / 生スコア / dropped / prompt 全文。
+   「Q2 では取れていたが Q3 で落ちた」が追える
+6. **generation が Optional**: 比較モード(Q4 スキップ)も同じ QueryTrace 構造で記録できる
+
+※ Query 側 API のエンドポイント設計は次ステップで行う。
 
 ---
 
@@ -396,7 +493,9 @@ CREATE TABLE rag.project_embedding_settings (
 ### 未決事項
 
 - Q1 `llm_rewrite` の具体仕様(書き換えプロンプト、使用モデル、失敗時のフォールバック)
-- Q3 Context Build のリランク方式(距離順のまま件数制御か、別のスコアリングを入れるか)
+- Q3 のリランク方式の詳細(RRF が有力候補だが、パラメータ・重み付けは未定)
+- 日本語全文検索の実現方法(pg_bigm: 2-gram で導入が軽い / PGroonga: 高機能だが導入が重め)
+- プロジェクト既定の RetrievalPlan の格納方法(projects に JSONB カラムか、別テーブルか)
 - PLaMo-Embedding-1B の Apple Silicon 上での推論方法(transformers + MPS で動かすか、量子化するか)— 要検証
 - API エンドポイントの一覧と URL 設計
 
@@ -411,8 +510,8 @@ CREATE TABLE rag.project_embedding_settings (
 
 ### 次のステップ
 
-1. **Query 側インターフェース定義**(Q1〜Q5 の入出力データ構造)← 次はここ
-2. **API インターフェース設計**(エンドポイント一覧、リクエスト/レスポンス定義)← ここまでがバイブコーディングの範囲
+1. ~~Query 側インターフェース定義~~ → **完了(§7.5)**
+2. **API インターフェース設計**(エンドポイント一覧、リクエスト/レスポンス定義)← 次はここ。ここまでがバイブコーディングの範囲
 3. インターフェース確定 → **API ごとにエージェンティックコーディング**
 4. DDL 確定 → マイグレーション作成
 5. 設定と評価の詳細(トレーススキーマ、比較モード API)
