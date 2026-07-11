@@ -282,7 +282,110 @@ CREATE TABLE rag.jobs (
 );
 ```
 
-※ 各エンドポイントの詳細なリクエスト/レスポンス定義は次ステップで行う。
+※ 各エンドポイントの詳細なリクエスト/レスポンス定義は以下 §7.8 以降に順次追加する。
+
+---
+
+## 7.8 エラー形式(全 API 共通、確定)
+
+```jsonc
+// 400 / 404 / 409 / 500 共通
+{
+  "error": {
+    "code": "project_not_found",      // 機械可読
+    "message": "Project not found",   // 人間可読
+    "detail": { ... }                 // 任意(バリデーション詳細等)
+  }
+}
+```
+
+---
+
+## 7.9 プロジェクト管理系 API 詳細(確定)
+
+### POST /projects — プロジェクト作成
+
+```jsonc
+// Request
+{
+  "name": "薬効RAG",                        // 必須
+  "description": "薬効データの検索",          // 任意
+  "query_transform_mode": "passthrough",     // 任意(既定: passthrough)
+  "retrieval_plan": {                        // 任意(既定: システム既定プラン)
+    "passes": [
+      { "name": "meta+vec", "strategy": "vector",   "top_k": 10, "use_metadata_filter": true,  "enabled": true },
+      { "name": "vec_only", "strategy": "vector",   "top_k": 3,  "use_metadata_filter": false, "enabled": true },
+      { "name": "fulltext", "strategy": "fulltext", "top_k": 5,  "use_metadata_filter": false, "enabled": true }
+    ]
+  }
+}
+
+// Response 201 Created
+{
+  "project_id": "uuid",
+  "name": "薬効RAG",
+  "description": "薬効データの検索",
+  "query_transform_mode": "passthrough",
+  "retrieval_plan": { ... },
+  "created_at": "2026-07-11T00:00:00Z",
+  "updated_at": "2026-07-11T00:00:00Z"
+}
+```
+
+### GET /projects — 一覧
+
+Response 200: `{ "projects": [ 上記形式の配列 ] }`
+
+### GET /projects/{project_id} — 詳細
+
+Response 200: 上記形式 + `embedding_settings` を同梱
+
+```jsonc
+{
+  "project_id": "uuid",
+  "name": "...", "description": "...",
+  "query_transform_mode": "passthrough",
+  "retrieval_plan": { ... },
+  "embedding_settings": [
+    { "model_key": "bge_m3",       "threshold": 0.6, "is_default": true },
+    { "model_key": "plamo_emb_1b", "threshold": 0.5, "is_default": false }
+  ],
+  "created_at": "...", "updated_at": "..."
+}
+```
+
+### PATCH /projects/{project_id} — 部分更新
+
+name / description / query_transform_mode / retrieval_plan のうち渡されたものだけ更新。
+Response 200: 更新後の全体(GET 詳細と同形式)
+
+### DELETE /projects/{project_id} — 削除
+
+Response 204 No Content。CASCADE で sources/chunks/embeddings も削除される。
+物理削除(復旧可能性は監査ログ audit_log が担保する。schema.md 参照)。
+
+### PUT /projects/{project_id}/embedding-settings/{model_key}
+
+```jsonc
+// Request
+{ "threshold": 0.6, "is_default": true }
+// Response 200
+{ "model_key": "bge_m3", "threshold": 0.6, "is_default": true }
+```
+
+`is_default: true` を設定したら、同一プロジェクトの他モデルの is_default は自動的に false になる
+(1 プロジェクトに default は常に 1 つ)。
+
+### GET /projects/{project_id}/embedding-settings
+
+Response 200: `{ "settings": [ ... ] }`
+
+### 設計判断
+
+1. **retrieval_plan は API 上プロジェクトの属性として扱う**。DB 上の格納方法(JSONB カラムか
+   別テーブルか)が未決のままでも API の形は不変
+2. **is_default の付け替えは PUT 側で自動処理**
+3. **DELETE は物理削除**。監査ログ(audit_log)がトラブル対応・障害解析・データ復旧を担保する
 
 ---
 
