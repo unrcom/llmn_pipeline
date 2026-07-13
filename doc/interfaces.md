@@ -263,8 +263,11 @@ GET /jobs/{job_id}
    「completed なら result を読む、processing なら poll_url をポーリング」の一本道
 2. **同期完了でも job_id を採番する**。全実行が jobs テーブルに記録され、
    同期/非同期は応答の仕方の違いに過ぎない
-3. **実装は経路 1 本**: 常にバックグラウンドタスクで実行し、`asyncio.wait_for(timeout=10)` で待つ。
+3. **実装は経路 1 本**: 常にバックグラウンドタスクで実行し、`asyncio.wait_for(timeout=...)` で待つ。
    間に合えば 200、間に合わなければ 202
+4. **タイムアウト値(10 秒)はハードコードせず Settings で設定化する**
+   (例: `sync_wait_timeout_seconds: float = 10.0`、.env で上書き可能)。
+   運用調整とテスト容易性(テストでは短い値に設定)のため
 
 ### 7.7.3 jobs テーブル(DDL 追加)
 

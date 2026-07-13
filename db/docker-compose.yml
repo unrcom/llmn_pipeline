@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: llmn_pipeline_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-llmn_pipeline}
+      POSTGRES_USER: ${POSTGRES_USER:-llmn_pipeline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-llmn_pipeline}
+    ports:
+      - "${POSTGRES_PORT:-5440}:5432"
+    volumes:
+      - llmn_pipeline_pgdata:/var/lib/postgresql/data
+
+volumes:
+  llmn_pipeline_pgdata:

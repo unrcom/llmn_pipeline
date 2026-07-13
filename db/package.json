@@ -1,0 +1,18 @@
+{
+  "name": "llmn_pipeline-db",
+  "version": "1.0.0",
+  "description": "llmn_pipeline PostgreSQL schema migrations (node-pg-migrate)",
+  "private": true,
+  "scripts": {
+    "migrate:up": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "migrate:create": "node-pg-migrate create -j sql --"
+  },
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "dotenv": "^17.4.2",
+    "node-pg-migrate": "^8.0.4",
+    "pg": "^8.22.0"
+  }
+}

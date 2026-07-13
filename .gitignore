@@ -3,4 +3,6 @@ back/.venv/
 back/.env
 back/__pycache__/
 back/**/__pycache__/
+db/node_modules/
+db/.env
 
