@@ -19,6 +19,23 @@ docker compose version
 `back/` 既存の Docker(llamune 等)がポート 5434-5439 を使用中のため、
 本プロジェクトの PostgreSQL はポート 5440 で起動する(後述の docker-compose.yml で設定済み)。
 
+### ツールが無い場合のインストール(macOS / Homebrew)
+
+```bash
+# pyenv
+brew install pyenv
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
+echo 'command -v pyenv >/dev/null && eval "$(pyenv init -)"' >> ~/.zshrc
+source ~/.zshrc
+pyenv install 3.13.13
+
+# node / docker が無い場合
+brew install node
+brew install --cask docker   # 初回は Docker Desktop を一度起動すること
+```
+
+pyenv global の変更は不要(back/.python-version により back/ 配下では自動で 3.13.13 になる)。
+
 ## 1. バックエンド(FastAPI)のセットアップ
 
 ```bash
