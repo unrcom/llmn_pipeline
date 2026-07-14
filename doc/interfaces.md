@@ -292,7 +292,7 @@ CREATE TABLE rag.jobs (
 ## 7.8 エラー形式(全 API 共通、確定)
 
 ```jsonc
-// 400 / 404 / 409 / 500 共通
+// 400 / 401 / 404 / 409 / 500 共通
 {
   "error": {
     "code": "project_not_found",      // 機械可読
@@ -301,6 +301,56 @@ CREATE TABLE rag.jobs (
   }
 }
 ```
+
+---
+
+## 7.8.5 認証(確定)
+
+### 方式: 自己記述的 API キー(.env 格納)
+
+すべての API は `X-API-Key` ヘッダによる認証を必須とする(**GET /health のみ除外**)。
+
+### キー形式
+
+```
+llmn_{name}_{secret}
+  例: llmn_mop_dev_Xa9kR2mPqW8vT5nL7cJ4
+```
+
+- `llmn_` — プロジェクトプレフィックス
+- `{name}` — ユーザー/用途の識別子(英数と `_`)。キーを見ればどのユーザーのリクエストか分かる
+- `{secret}` — ランダム部(24 バイト以上を urlsafe エンコード)。秘密性はここだけが担う
+
+### 検証規則
+
+1. 認証は **キー文字列全体の完全一致** で行う(name 部を切り出して照合するようなパースはしない)
+2. 有効キーは環境変数 `API_KEYS`(カンマ区切り)に列挙する
+
+```bash
+# .env
+API_KEYS=llmn_mop_dev_Xa9kR2mPqW8vT5nL7cJ4,llmn_sier_a_B3fH6jN9sD2gK5pQ8wZ1
+```
+
+3. 認証失敗(ヘッダなし / 不一致)は **401** を §7.8 形式で返す:
+
+```jsonc
+{ "error": { "code": "invalid_api_key", "message": "Invalid or missing API key" } }
+```
+
+4. ログにはキー全体を残さず、secret 部を除いた識別部(例: `llmn_mop_dev`)のみを記録する
+
+### 実装方針
+
+- FastAPI の依存性(DI)として一点実装し、全ルーターに適用する(/health のみ除外)。
+  将来 DB 方式(api_keys テーブル)や unrauth(JWT)へ移行する場合も、この DI の内部
+  実装を差し替えるだけで API 契約(ヘッダ名・401 形式)は不変
+- キーの発行は手動: `python -c "import secrets; print('llmn_{name}_' + secrets.token_urlsafe(24))"`
+  を実行し .env に追記、アプリ再起動で反映
+
+### 将来拡張(未実装)
+
+- DB 方式(api_keys テーブル: ハッシュ保存、is_active による即時失効、last_used_at 記録)
+- 認可(キー×プロジェクトのテナント分離)は unrauth 統合時に検討
 
 ---
 
