@@ -11,6 +11,7 @@ services:
       - "${POSTGRES_PORT:-5440}:5432"
     volumes:
       - llmn_pipeline_pgdata:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
 
 volumes:
   llmn_pipeline_pgdata:

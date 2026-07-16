@@ -61,6 +61,12 @@ cp .env.example .env   # back/.env の DB_NAME / DB_USER / DB_PASSWORD / DB_PORT
 docker compose up -d    # PostgreSQL(pgvector 同梱)をポート 5440 で起動
 ```
 
+初回起動時(named volume が空の状態)には、`db/init/01-create-test-db.sql` により
+開発 DB `llmn_pipeline` に加えてテスト専用 DB `llmn_pipeline_test` が自動作成される
+(§6 参照)。postgres の初期化スクリプトは **volume が空のときにしか実行されない**ため、
+依頼 1.5 より前に作成した既存の volume を使い続けている場合は
+`docker compose down -v` してから `up -d` し直すこと(**開発 DB のデータも消える**)。
+
 コンテナが起動するまで数秒待ってから、マイグレーションを実行する。
 
 ```bash
@@ -120,7 +126,7 @@ docker compose exec -T postgres psql -U llmn_pipeline -d llmn_pipeline \
 
 ```bash
 cd db
-npm run migrate:down -- 3   # 現時点のマイグレーション本数(3)を指定して全ロールバック
+npm run migrate:down -- 4   # 現時点のマイグレーション本数(4)を指定して全ロールバック
 ```
 
 引数を省略した場合は直近 1 本のみ戻る点に注意。全て戻したことは以下で確認できる。
@@ -132,10 +138,51 @@ docker compose exec -T postgres psql -U llmn_pipeline -d llmn_pipeline -c "\dn"
 
 再度適用する場合は `npm run migrate:up` を実行する。
 
-## 6. 後片付け
+## 6. テストの実行(依頼 1.5: テスト DB の分離)
+
+テストは開発 DB(`llmn_pipeline`)とは別の専用 DB `llmn_pipeline_test` に対して実行される
+(同一コンテナ内、§2 の初回起動時に `db/init/01-create-test-db.sql` で作成される)。
+接続先 DB 名は `back/tests/conftest.py` 内で無条件に固定されており、`.env` の `DB_NAME` を
+変更してもテストの接続先は変わらない(開発 DB でテストが走る事故を構造的に排除するため)。
+
+```bash
+cd back
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+
+pytest
+```
+
+pytest 実行時、セッション開始時に `db/` ディレクトリで `npm run migrate:up` が
+`DATABASE_URL` を `llmn_pipeline_test` 向けに上書きして自動実行される
+(`db/` で `npm install` 済みであることが前提。§2 参照)。
+
+### 動作確認: 開発 DB のデータが pytest 実行後も残ること
+
+```bash
+# 開発 DB にマーカー行を入れる
+cd db
+docker compose exec -T postgres psql -U llmn_pipeline -d llmn_pipeline \
+  -c "INSERT INTO rag.projects (name) VALUES ('marker');"
+
+# テストを実行(11 件全て成功すること)
+cd ../back
+pytest
+
+# 開発 DB にマーカー行が残っていることを確認(1 row 返れば OK)
+cd ../db
+docker compose exec -T postgres psql -U llmn_pipeline -d llmn_pipeline \
+  -c "SELECT name FROM rag.projects WHERE name = 'marker';"
+
+# 後片付け
+docker compose exec -T postgres psql -U llmn_pipeline -d llmn_pipeline \
+  -c "DELETE FROM rag.projects WHERE name = 'marker';"
+```
+
+## 7. 後片付け
 
 ```bash
 cd db
 docker compose down          # コンテナ停止(データは named volume に残る)
-docker compose down -v       # データも含めて完全に削除する場合
+docker compose down -v       # データも含めて完全に削除する場合(テスト DB も消える)
 ```
