@@ -20,6 +20,10 @@ CREATE TABLE rag.projects (
   -- Q1 Query Transform の既定モード
   query_transform_mode TEXT NOT NULL DEFAULT 'passthrough'
     CHECK (query_transform_mode IN ('passthrough', 'llm_rewrite')),
+  -- 既定の検索プラン(依頼 1-1 で確定: JSONB カラム方式)。
+  -- DB の DEFAULT にもシステム既定プラン(interfaces.md §7.9)を設定する
+  -- (アプリ側の明示投入と二重になるが、直接 INSERT 時の安全網として意図的に残す)
+  retrieval_plan JSONB NOT NULL DEFAULT '<システム既定プラン。実際の値は §7.9 参照>',
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

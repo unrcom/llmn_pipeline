@@ -17,7 +17,8 @@
 
 | # | 依頼 | 内容 |
 |---|------|------|
-| 1-1 | POST /projects + GET /projects | 作成と一覧をセット(動作確認が自己完結する) |
+| 1-1 | POST /projects + GET /projects | 作成と一覧をセット(動作確認が自己完結する) + 認証基盤(§7.8.5) |
+| 1.5 | テスト DB の分離 | 同一コンテナ内に `llmn_pipeline_test` DB を追加。conftest.py が接続先 DB 名を無条件に test に固定(開発 DB でテストが走る事故を構造的に排除)。テスト開始時にマイグレーション適用。setup.md 追記 |
 | 1-2 | GET /projects/{id} + PATCH + DELETE | 詳細・部分更新・削除(CASCADE と audit_log の動作確認込み) |
 | 1-3 | embedding-settings PUT / GET | is_default の自動付け替え含む |
 

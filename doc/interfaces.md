@@ -319,7 +319,9 @@ llmn_{name}_{secret}
 
 - `llmn_` — プロジェクトプレフィックス
 - `{name}` — ユーザー/用途の識別子(英数と `_`)。キーを見ればどのユーザーのリクエストか分かる
-- `{secret}` — ランダム部(24 バイト以上を urlsafe エンコード)。秘密性はここだけが担う
+- `{secret}` — ランダム部(**`secrets.token_hex(16)` で生成。`_` を含まない**)。秘密性はここだけが担う。
+  name 部には `_` を含んでよい(識別部の切り出しは「最後の `_`」で行われ、secret が `_` を
+  含まないことで境界が一意に定まる)
 
 ### 検証規則
 
@@ -344,7 +346,7 @@ API_KEYS=llmn_mop_dev_Xa9kR2mPqW8vT5nL7cJ4,llmn_sier_a_B3fH6jN9sD2gK5pQ8wZ1
 - FastAPI の依存性(DI)として一点実装し、全ルーターに適用する(/health のみ除外)。
   将来 DB 方式(api_keys テーブル)や unrauth(JWT)へ移行する場合も、この DI の内部
   実装を差し替えるだけで API 契約(ヘッダ名・401 形式)は不変
-- キーの発行は手動: `python -c "import secrets; print('llmn_{name}_' + secrets.token_urlsafe(24))"`
+- キーの発行は手動: `python -c "import secrets; print('llmn_{name}_' + secrets.token_hex(16))"`
   を実行し .env に追記、アプリ再起動で反映
 
 ### 将来拡張(未実装)
