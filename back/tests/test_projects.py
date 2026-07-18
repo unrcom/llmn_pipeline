@@ -65,6 +65,11 @@ class TestCreateProject:
         assert response.status_code == 400
         assert response.json()["error"]["code"] == "validation_error"
 
+    async def test_empty_name_returns_400(self, client):
+        response = await client.post("/projects", headers=AUTH_HEADERS, json={"name": ""})
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "validation_error"
+
     async def test_invalid_transform_mode_returns_400(self, client):
         response = await client.post(
             "/projects",
@@ -108,3 +113,145 @@ class TestListProjects:
         response = await client.get("/projects", headers=AUTH_HEADERS)
         assert response.status_code == 200
         assert response.json() == {"projects": []}
+
+
+NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+async def _create_project(client, **overrides):
+    payload = {"name": "詳細取得用プロジェクト", **overrides}
+    response = await client.post("/projects", headers=AUTH_HEADERS, json=payload)
+    assert response.status_code == 201
+    return response.json()
+
+
+class TestGetProject:
+    async def test_get_returns_detail_with_empty_embedding_settings(self, client):
+        created = await _create_project(client)
+
+        response = await client.get(f"/projects/{created['project_id']}", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["project_id"] == created["project_id"]
+        assert body["name"] == "詳細取得用プロジェクト"
+        assert body["embedding_settings"] == []
+
+    async def test_get_nonexistent_returns_404(self, client):
+        response = await client.get(f"/projects/{NIL_UUID}", headers=AUTH_HEADERS)
+        assert response.status_code == 404
+        assert response.json() == {
+            "error": {"code": "project_not_found", "message": "Project not found"}
+        }
+
+    async def test_get_invalid_uuid_returns_400(self, client):
+        response = await client.get("/projects/not-a-uuid", headers=AUTH_HEADERS)
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "validation_error"
+
+    async def test_get_without_api_key_returns_401(self, client):
+        created = await _create_project(client)
+        response = await client.get(f"/projects/{created['project_id']}")
+        assert response.status_code == 401
+
+
+class TestPatchProject:
+    async def test_patch_updates_only_given_field(self, client):
+        created = await _create_project(client, description="元の説明")
+
+        response = await client.patch(
+            f"/projects/{created['project_id']}",
+            headers=AUTH_HEADERS,
+            json={"description": "更新後の説明"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["description"] == "更新後の説明"
+        assert body["name"] == created["name"]
+        assert body["query_transform_mode"] == created["query_transform_mode"]
+        assert body["retrieval_plan"] == created["retrieval_plan"]
+        assert body["updated_at"] != created["updated_at"]
+
+    async def test_patch_nonexistent_returns_404(self, client):
+        response = await client.patch(
+            f"/projects/{NIL_UUID}", headers=AUTH_HEADERS, json={"name": "存在しない"}
+        )
+        assert response.status_code == 404
+
+    async def test_patch_invalid_uuid_returns_400(self, client):
+        response = await client.patch(
+            "/projects/not-a-uuid", headers=AUTH_HEADERS, json={"name": "x"}
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "validation_error"
+
+    async def test_patch_invalid_transform_mode_returns_400(self, client):
+        created = await _create_project(client)
+
+        response = await client.patch(
+            f"/projects/{created['project_id']}",
+            headers=AUTH_HEADERS,
+            json={"query_transform_mode": "invalid_mode"},
+        )
+        assert response.status_code == 400
+
+    async def test_patch_null_name_returns_400(self, client):
+        created = await _create_project(client)
+
+        response = await client.patch(
+            f"/projects/{created['project_id']}", headers=AUTH_HEADERS, json={"name": None}
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "validation_error"
+
+    async def test_patch_empty_name_returns_400(self, client):
+        created = await _create_project(client)
+
+        response = await client.patch(
+            f"/projects/{created['project_id']}", headers=AUTH_HEADERS, json={"name": ""}
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "validation_error"
+
+    async def test_patch_null_description_clears_it(self, client):
+        created = await _create_project(client, description="元の説明")
+
+        response = await client.patch(
+            f"/projects/{created['project_id']}", headers=AUTH_HEADERS, json={"description": None}
+        )
+        assert response.status_code == 200
+        assert response.json()["description"] is None
+
+    async def test_patch_without_api_key_returns_401(self, client):
+        created = await _create_project(client)
+        response = await client.patch(
+            f"/projects/{created['project_id']}", json={"name": "無認証更新"}
+        )
+        assert response.status_code == 401
+
+
+class TestDeleteProject:
+    async def test_delete_then_get_returns_404(self, client):
+        created = await _create_project(client)
+
+        delete_response = await client.delete(
+            f"/projects/{created['project_id']}", headers=AUTH_HEADERS
+        )
+        assert delete_response.status_code == 204
+        assert delete_response.content == b""
+
+        get_response = await client.get(f"/projects/{created['project_id']}", headers=AUTH_HEADERS)
+        assert get_response.status_code == 404
+
+    async def test_delete_nonexistent_returns_404(self, client):
+        response = await client.delete(f"/projects/{NIL_UUID}", headers=AUTH_HEADERS)
+        assert response.status_code == 404
+
+    async def test_delete_invalid_uuid_returns_400(self, client):
+        response = await client.delete("/projects/not-a-uuid", headers=AUTH_HEADERS)
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "validation_error"
+
+    async def test_delete_without_api_key_returns_401(self, client):
+        created = await _create_project(client)
+        response = await client.delete(f"/projects/{created['project_id']}")
+        assert response.status_code == 401

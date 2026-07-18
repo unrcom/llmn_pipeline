@@ -34,12 +34,21 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     return _error_response(exc.status_code, exc.code, exc.message, exc.detail)
 
 
+def _jsonable_error(error: dict[str, Any]) -> dict[str, Any]:
+    # pydantic のカスタムバリデータ(raise ValueError)は ctx.error に例外オブジェクトを
+    # そのまま積むため、JSON エンコード可能な文字列に変換してから返す。
+    ctx = error.get("ctx")
+    if isinstance(ctx, dict) and isinstance(ctx.get("error"), Exception):
+        error = {**error, "ctx": {**ctx, "error": str(ctx["error"])}}
+    return error
+
+
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     return _error_response(
         status.HTTP_400_BAD_REQUEST,
         "validation_error",
         "Request validation failed",
-        exc.errors(),
+        [_jsonable_error(error) for error in exc.errors()],
     )
 
 
